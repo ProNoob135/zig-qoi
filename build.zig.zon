@@ -65,6 +65,10 @@
         //    // actually used.
         //    .lazy = false,
         //},
+        .png = .{
+            .url = "git+https://github.com/pnggroup/libpng?ref=devel#2b978915d82377df13fcbb1fb56660195ded868a",
+            .hash = "N-V-__8AAGrVXwC00HYe0ep6gbt70MXihr_woI0886_w8tD8",
+        },
     },
 
     // Specifies the set of files and directories that are included in this package.
