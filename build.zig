@@ -31,11 +31,7 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "qoi",
         .root_module = exe_mod,
-        .strip = optimize != std.builtin.OptimizeMode.Debug,
     });
-
-    exe.linkSystemLibrary("png");
-    exe.linkLibC();
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
