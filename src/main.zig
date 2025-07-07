@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const QoiHeader = extern struct {
-    magic: [4]u8 = .{'q', 'o', 'i', 'f'},
+    magic: [4]u8 = .{ 'q', 'o', 'i', 'f' },
     width: u32 align(1),
     height: u32 align(1),
     channels: u8 = 4,
@@ -13,17 +13,16 @@ pub fn qoiWrite(reader: anytype, writer: anytype, header: QoiHeader) !void {
     try writer.writeStructEndian(header, std.builtin.Endian.big);
 
     // Previous pixel and hash table must be initialized to 0
-    var prev_rgba = @Vector(4, u8){0, 0, 0, 255};
+    var prev_rgba = @Vector(4, u8){ 0, 0, 0, 255 };
     var hash_table = [_]@Vector(4, u8){@as(@Vector(4, u8), @splat(0))} ** 64;
 
     var run: u8 = 0;
     for (0..header.width * header.height) |_| {
-        const current_rgba: @Vector(4, u8) = switch(header.channels) {
-            3 => ((try reader.readBoundedBytes(3)).slice()[0..3] ++ .{255}).*,
-            4 => (try reader.readBoundedBytes(4)).slice()[0..4].*,
+        const current_rgba: @Vector(4, u8) = switch (header.channels) {
+            3 => try reader.readBytesNoEof(3) ++ .{255},
+            4 => try reader.readBytesNoEof(4),
             else => unreachable,
         };
-        defer prev_rgba = current_rgba;
 
         // QOI_OP_RUN
         if (@as(u32, @bitCast(current_rgba)) == @as(u32, @bitCast(prev_rgba))) {
@@ -38,11 +37,14 @@ pub fn qoiWrite(reader: anytype, writer: anytype, header: QoiHeader) !void {
             run = 0;
         }
 
+        // Wait until current_rgba changes to update previous pixel, and don't do it until it's done being used
+        defer prev_rgba = current_rgba;
+
         // If pixel has changed, the hash must always be calculated, so may as well do it now
         const hash_index: u8 = @mod(current_rgba[0] *% 3 +% current_rgba[1] *% 5 +% current_rgba[2] *% 7 +% current_rgba[3] *% 11, 64);
         // QOI_OP_INDEX
         if (@as(std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(current_rgba))), @bitCast(current_rgba)) == @as(u32, @bitCast(hash_table[hash_index]))) {
-            try writer.writeByte(hash_index);    
+            try writer.writeByte(hash_index);
             continue;
         } else {
             hash_table[hash_index] = current_rgba;
@@ -50,7 +52,7 @@ pub fn qoiWrite(reader: anytype, writer: anytype, header: QoiHeader) !void {
 
         // QOI_OP_RGBA (must be used if alpha has changed)
         if (current_rgba[3] != prev_rgba[3]) {
-            _ = try writer.write( &(.{255} ++ @as([4]u8, current_rgba)) );
+            try writer.writeAll(&(.{255} ++ @as([4]u8, current_rgba)));
             continue;
         }
 
@@ -74,14 +76,15 @@ pub fn qoiWrite(reader: anytype, writer: anytype, header: QoiHeader) !void {
             difference[1] +% 32,
             difference[2] -% difference[1] +% 8,
         };
-        if (@reduce(.And, difference_luma < @Vector(3, u8){16, 64, 16})) {
-            try writer.writeByte(128 + difference_luma[1]);
-            try writer.writeByte((difference_luma[0] << 4) + difference_luma[2]);
+        if (@reduce(.And, difference_luma < @Vector(3, u8){ 16, 64, 16 })) {
+            //try writer.writeByte(128 + difference_luma[1]);
+            //try writer.writeByte((difference_luma[0] << 4) + difference_luma[2]);
+            try writer.writeAll(&(.{128 + difference_luma[1], (difference_luma[0] << 4) + difference_luma[2]}));
             continue;
         }
-        
+
         // QOI_OP_RGB (if all compression attempts have failed)
-        _ = try writer.write( &(.{254} ++ @as([3]u8, current_rgb)) );
+        try writer.writeAll(&(.{254} ++ @as([3]u8, current_rgb)));
         continue;
     }
     // Finish any incomplete runs
@@ -91,7 +94,97 @@ pub fn qoiWrite(reader: anytype, writer: anytype, header: QoiHeader) !void {
     }
 
     // Write terminator
-    _ = try writer.writeInt(u64, 1, std.builtin.Endian.big);
+    try writer.writeInt(u64, 1, std.builtin.Endian.big);
+}
+
+fn qoiRead(reader: anytype, writer: anytype) !void {
+    const header = try reader.readStructEndian(QoiHeader, .big);
+    std.debug.print("{any}\n", .{header});
+
+    // Previous pixel and hash table must be initialized to 0
+    var prev_rgba = @Vector(4, u8){ 0, 0, 0, 255 };
+    var hash_table = [_]@Vector(4, u8){ .{ 0, 0, 0, 255} } ** 64;
+
+    var index: u64 = 0;
+    while (index < header.width * header.height) {
+
+        var current_rgba: @Vector(4, u8) = undefined;
+        const tag_byte = try reader.readByte();
+        switch(tag_byte) {
+            // QOI_OP_INDEX
+            0...63 => {
+                index += 1;
+                current_rgba = hash_table[tag_byte];
+                switch (header.channels) {
+                    3 => try writer.writeAll(@as([4]u8, current_rgba)[0..3]),
+                    4 => try writer.writeAll(&@as([4]u8, current_rgba)),
+                    else => unreachable,
+                }
+                prev_rgba = current_rgba;
+                // Updating hash table is unecessary as there are no new colors.
+                continue;
+            },
+            // QOI_OP_DIFF
+            64...127 => {
+                index += 1;
+                const mask: @Vector(4, u2) = .{ 3, 3, 3, 0 };
+                const bias: @Vector(4, u2) = .{ 2, 2, 2, 0 };
+                const difference = (@Vector(4, u8){ (tag_byte >> 4), (tag_byte >> 2), tag_byte, 0} & mask) -% bias;
+                current_rgba = prev_rgba +% difference;
+            },
+            // QOI_OP_LUMA
+            128...191 => {
+                index += 1;
+                const mask: @Vector(4, u6) = .{ 15, 63, 15, 0 };
+                // Red and Blue must include green bias.
+                const bias: @Vector(4, u6) = .{ 40, 32, 40, 0 };
+                const next_byte = try reader.readByte();
+                const biased_green_difference = tag_byte & 63;
+                const difference = (@Vector(4, u8){ (next_byte >> 4), biased_green_difference, next_byte, 0 } & mask) +% @Vector(4, u8){ biased_green_difference, 0, biased_green_difference, 0 } -% bias;
+                current_rgba = prev_rgba +% difference;
+            },
+            // QOI_OP_RUN
+            192...253 => {
+                const run = (tag_byte & 63) + 1;
+                index += run;
+                switch (header.channels) {
+                    3 => try writer.writeBytesNTimes(@as([4]u8, prev_rgba)[0..3], run),
+                    4 => try writer.writeBytesNTimes(&@as([4]u8, prev_rgba), run),
+                    else => unreachable,
+                }
+                // Updating hash table and previous color is unecessary as there are no new colors.
+                continue;
+            },
+            // QOI_OP_RGB
+            254 => {
+                index += 1;
+                current_rgba = try reader.readBytesNoEof(3) ++ .{prev_rgba[3]};
+            },
+            // QOI_OP_RGBA
+            255 => {
+                index += 1;
+                current_rgba = try reader.readBytesNoEof(4);
+            },
+            //else => {
+            //    index += 1;
+            //    current_rgba = .{ 128, 128, 128, 255};
+            //},
+        }
+        switch (header.channels) {
+            3 => try writer.writeAll(@as([4]u8, current_rgba)[0..3]),
+            4 => try writer.writeAll(&@as([4]u8, current_rgba)),
+            else => unreachable,
+        }
+        prev_rgba = current_rgba;
+
+        const hash_index: u8 = @mod(current_rgba[0] *% 3 +% current_rgba[1] *% 5 +% current_rgba[2] *% 7 +% current_rgba[3] *% 11, 64);
+        hash_table[hash_index] = current_rgba;
+    }
+}
+
+fn printHelp() noreturn {
+    std.debug.print("Usage: qoi <input path> <width> <height> <channels (3,4)> <colorspace (0, 1)> <output path>\n", .{});
+    std.process.exit(1);
 }
 
 pub fn main() !void {
@@ -102,32 +195,43 @@ pub fn main() !void {
         args = std.process.args();
     }
     _ = args.skip();
-    var argSlices = [_][:0]const u8{undefined} ** 6;
-    for (&argSlices) |*arg| {
-        if (args.next()) |next_arg| {
-            arg.* = next_arg;
-        } else {
-            std.debug.print("Usage: qoi <input path> <width> <height> <channels (3,4)> <colorspace (0, 1)> <output path>\n", .{});
-            return;
-        }
+    const input_path = args.next() orelse printHelp();
+    
+    var write = false;
+    var qoi_header: QoiHeader = undefined;
+    if (std.mem.eql(u8, input_path[input_path.len-4..][0..4], ".raw")) {
+        write = true;
+        qoi_header = .{
+             .width = std.fmt.parseInt(u32, args.next() orelse printHelp(), 10) catch printHelp(),
+             .height = std.fmt.parseInt(u32, args.next() orelse printHelp(), 10) catch printHelp(),
+             .channels = std.fmt.parseInt(u3, args.next() orelse printHelp(), 10) catch printHelp(),
+             .colorspace = std.fmt.parseInt(u1, args.next() orelse printHelp(), 10) catch printHelp(),
+        };
+        if (qoi_header.channels < 3 or qoi_header.channels > 4 or qoi_header.colorspace < 0 or qoi_header.colorspace > 1) printHelp();
     }
-    const input_path = argSlices[0];
-    const width = try std.fmt.parseInt(u32, argSlices[1], 10);
-    const height = try std.fmt.parseInt(u32, argSlices[2], 10);
-    const channels = try std.fmt.parseInt(u3, argSlices[3], 10);
-    const colorspace = try std.fmt.parseInt(u1, argSlices[4], 10);
-    const output_path = argSlices[5];
 
-    const input_image = try std.fs.cwd().openFile(input_path, .{.mode = .read_only});
+    const output_path = args.next() orelse printHelp();
+    if (args.skip()) printHelp();
+
+    const input_image = std.fs.cwd().openFile(input_path, .{ .mode = .read_only }) catch |err| {
+        std.debug.print("file read error: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
     const input_image_reader = input_image.reader();
     var buffered_input_image = std.io.bufferedReader(input_image_reader);
 
-    const output_image = try std.fs.cwd().createFile(output_path, .{});
+    const output_image = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        std.debug.print("File write error: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
     defer output_image.close();
     const output_image_writer = output_image.writer();
     var buffered_output_image = std.io.bufferedWriter(output_image_writer);
 
-    try qoiWrite(&buffered_input_image.reader(), &buffered_output_image.writer(), .{ .width = width, .height = height, .channels = channels, .colorspace = colorspace});
-    
+    switch(write) {
+        true => try qoiWrite(&buffered_input_image.reader(), &buffered_output_image.writer(), qoi_header),
+        false => try qoiRead(&buffered_input_image.reader(), &buffered_output_image.writer()),
+    }
+
     try buffered_output_image.flush();
 }
