@@ -117,90 +117,87 @@ pub fn read(reader: anytype, writer: anytype) !Header {
 
     var index: u64 = 0;
     while (index < @as(u64, header.width) * @as(u64, header.height)) {
-
         var current_rgba: [4]u8 = undefined;
         const tag_byte = try reader.readByte();
-        switch(tag_byte) {
-            // QOI_OP_INDEX
-            0...63 => {
-                index += 1;
-                current_rgba = hash_table[tag_byte];
-                switch (header.channels) {
-                    3 => try writer.writeAll(@as([4]u8, current_rgba)[0..3]),
-                    4 => try writer.writeAll(&@as([4]u8, current_rgba)),
-                    else => unreachable,
-                }
-                prev_rgba = current_rgba;
-                // Updating hash table is unecessary as there are no new colors.
-                continue;
-            },
-            // QOI_OP_DIFF
-            64...127 => {
-                index += 1;
-                const difference = [3]u8{
-                    ((tag_byte >> 4) & 3) -% 2,
-                    ((tag_byte >> 2) & 3) -% 2,
-                    (tag_byte & 3) -% 2,
-                };
-                current_rgba = .{
-                    prev_rgba[0] +% difference[0],
-                    prev_rgba[1] +% difference[1],
-                    prev_rgba[2] +% difference[2],
-                    prev_rgba[3],
-                };
-            },
-            // QOI_OP_LUMA
-            128...191 => {
-                index += 1;
-                // Red and Blue must include Green bias.
-                const bias: [3]u8 = .{ 40, 32, 40 };
-                const next_byte = try reader.readByte();
-                const biased_g_difference = tag_byte & 63;
-                const biased_rb_difference = [2]u8{ (next_byte >> 4) & 15, next_byte & 15 };
-                const difference = .{
-                    (biased_rb_difference[0] +% biased_g_difference) -% bias[0],
-                    biased_g_difference -% bias[1],
-                    (biased_rb_difference[1] +% biased_g_difference) -% bias[2],
-                };
-                current_rgba = .{
-                    prev_rgba[0] +% difference[0],
-                    prev_rgba[1] +% difference[1],
-                    prev_rgba[2] +% difference[2],
-                    prev_rgba[3],
-                };
-            },
-            // QOI_OP_RUN
-            192...253 => {
-                const run = (tag_byte & 63) + 1;
-                index += run;
-                switch (header.channels) {
-                    3 => try writer.writeBytesNTimes(prev_rgba[0..3], run),
-                    4 => try writer.writeBytesNTimes(&prev_rgba, run),
-                    else => unreachable,
-                }
-                // Updating hash table and previous color is unecessary as there are no new colors.
-                continue;
-            },
-            // QOI_OP_RGB
-            254 => {
-                index += 1;
-                current_rgba = try reader.readBytesNoEof(3) ++ .{prev_rgba[3]};
-            },
-            // QOI_OP_RGBA
-            255 => {
-                index += 1;
-                current_rgba = try reader.readBytesNoEof(4);
-            },
+        block: {
+            switch(tag_byte) {
+                // QOI_OP_INDEX
+                0...63 => {
+                    index += 1;
+                    current_rgba = hash_table[tag_byte];
+                    // Updating hash table is unecessary as there are no new colors.
+                    break :block;
+                },
+                // QOI_OP_DIFF
+                64...127 => {
+                    index += 1;
+                    const difference = [3]u8{
+                        ((tag_byte >> 4) & 3) -% 2,
+                        ((tag_byte >> 2) & 3) -% 2,
+                        (tag_byte & 3) -% 2,
+                    };
+                    current_rgba = .{
+                        prev_rgba[0] +% difference[0],
+                        prev_rgba[1] +% difference[1],
+                        prev_rgba[2] +% difference[2],
+                        prev_rgba[3],
+                    };
+                },
+                // QOI_OP_LUMA
+                128...191 => {
+                    index += 1;
+                    // Red and Blue must include Green bias.
+                    const bias: [3]u8 = .{ 40, 32, 40 };
+                    const next_byte = try reader.readByte();
+                    const biased_g_difference = tag_byte & 63;
+                    const biased_rb_difference = [2]u8{ (next_byte >> 4) & 15, next_byte & 15 };
+                    const difference = .{
+                        (biased_rb_difference[0] +% biased_g_difference) -% bias[0],
+                        biased_g_difference -% bias[1],
+                        (biased_rb_difference[1] +% biased_g_difference) -% bias[2],
+                    };
+                    current_rgba = .{
+                        prev_rgba[0] +% difference[0],
+                        prev_rgba[1] +% difference[1],
+                        prev_rgba[2] +% difference[2],
+                        prev_rgba[3],
+                    };
+                },
+                // QOI_OP_RUN
+                192...253 => {
+                    const run = (tag_byte & 63) + 1;
+                    index += run;
+                    // Skip default write and write run all at once
+                    switch (header.channels) {
+                        3 => try writer.writeBytesNTimes(prev_rgba[0..3], run),
+                        4 => try writer.writeBytesNTimes(&prev_rgba, run),
+                        else => unreachable,
+                    }
+                    // Updating hash table and previous color is unecessary as there are no new colors.
+                    continue;
+                },
+                // QOI_OP_RGB
+                254 => {
+                    index += 1;
+                    current_rgba = try reader.readBytesNoEof(3) ++ .{prev_rgba[3]};
+                },
+                // QOI_OP_RGBA
+                255 => {
+                    index += 1;
+                    current_rgba = try reader.readBytesNoEof(4);
+                },
+            }
+
+            const hash_index: u8 = @mod(current_rgba[0] *% 3 +% current_rgba[1] *% 5 +% current_rgba[2] *% 7 +% current_rgba[3] *% 11, 64);
+            hash_table[hash_index] = current_rgba;
         }
+        prev_rgba = current_rgba;
+
         switch (header.channels) {
             3 => try writer.writeAll(current_rgba[0..3]),
             4 => try writer.writeAll(&current_rgba),
             else => unreachable,
         }
-        prev_rgba = current_rgba;
-
-        const hash_index: u8 = @mod(current_rgba[0] *% 3 +% current_rgba[1] *% 5 +% current_rgba[2] *% 7 +% current_rgba[3] *% 11, 64);
-        hash_table[hash_index] = current_rgba;
     }
     return header;
 }
