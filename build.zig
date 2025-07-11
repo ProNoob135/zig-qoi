@@ -56,20 +56,20 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const bench_cmd = b.addSystemCommand(&.{
-        "hyperfine", b.path("zig-out/bin/example_cli").sub_path,
-    });
-    bench_cmd.step.dependOn(b.getInstallStep());
+    //const bench_cmd = b.addSystemCommand(&.{
+    //    "hyperfine", b.path("zig-out/bin/example_cli").,
+    //});
+    //bench_cmd.step.dependOn(b.getInstallStep());
 
-    const bench_step = b.step("bench", "Benchmark");
-    bench_step.dependOn(&bench_cmd.step);
+    //const bench_step = b.step("bench", "Benchmark");
+    //bench_step.dependOn(&bench_cmd.step);
 
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
     if (b.args) |args| {
         run_cmd.addArgs(args);
-        bench_cmd.addArgs(args);
+        //bench_cmd.addArgs(args);
     }
 
     const exe_unit_tests = b.addTest(.{

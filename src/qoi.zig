@@ -12,13 +12,13 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
     try writer.writeStructEndian(header, std.builtin.Endian.big);
 
     // Previous pixel and hash table must be initialized to 0
-    var prev_rgba = @Vector(4, u8){ 0, 0, 0, 255 };
-    var hash_table = [_]@Vector(4, u8){@as(@Vector(4, u8), @splat(0))} ** 64;
+    var prev_rgba = [4]u8{ 0, 0, 0, 255 };
+    var hash_table = [_][4]u8{[_]u8{0} ** 4} ** 64;
 
     var run: u8 = 0;
     var index: u64 = 0;
     while (index < @as(u64, header.width) * @as(u64, header.height)) : (index += 1) {
-        const current_rgba: @Vector(4, u8) = switch (header.channels) {
+        const current_rgba: [4]u8 = switch (header.channels) {
             3 => try reader.readBytesNoEof(3) ++ .{255},
             4 => try reader.readBytesNoEof(4),
             else => unreachable,
@@ -52,31 +52,39 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
 
         // QOI_OP_RGBA (must be used if alpha has changed)
         if (current_rgba[3] != prev_rgba[3]) {
-            try writer.writeAll(&(.{255} ++ @as([4]u8, current_rgba)));
+            try writer.writeAll(&(.{255} ++ current_rgba));
             continue;
         }
 
         // Remove alpha channel going forward as it's irrelevant
-        const current_rgb: @Vector(3, u8) = @as([4]u8, current_rgba)[0..3].*;
-        const prev_rgb: @Vector(3, u8) = @as([4]u8, prev_rgba)[0..3].*;
+        const current_rgb = current_rgba[0..3].*;
+        const prev_rgb = prev_rgba[0..3].*;
 
         // calculate difference once
-        const difference = (current_rgb -% prev_rgb);
+        const difference = .{
+            current_rgb[0] -% prev_rgb[0],
+            current_rgb[1] -% prev_rgb[1],
+            current_rgb[2] -% prev_rgb[2],
+        };
 
         // QOI_OP_DIFF
-        const difference_u2 = difference +% @as(@Vector(3, u8), @splat(2));
-        if (@reduce(.Max, difference_u2) < 4) {
+        const difference_u2 = .{
+            difference[0] +% 2,
+            difference[1] +% 2,
+            difference[2] +% 2,
+        };
+        if (difference_u2[0] < 4 and difference_u2[1] < 4 and difference_u2[2] < 4) {
             try writer.writeByte(64 + (difference_u2[0] << 4) + (difference_u2[1] << 2) + difference_u2[2]);
             continue;
         }
 
         // QOI_OP_LUMA
-        const difference_luma: @Vector(3, u8) = .{
+        const difference_luma: [3]u8 = .{
             difference[0] -% difference[1] +% 8,
             difference[1] +% 32,
             difference[2] -% difference[1] +% 8,
         };
-        if (@reduce(.And, difference_luma < @Vector(3, u8){ 16, 64, 16 })) {
+        if (difference_luma[0] < 16 and difference_luma[1] < 64 and difference_luma[2] < 16 ) {
             //try writer.writeByte(128 + difference_luma[1]);
             //try writer.writeByte((difference_luma[0] << 4) + difference_luma[2]);
             try writer.writeAll(&(.{128 + difference_luma[1], (difference_luma[0] << 4) + difference_luma[2]}));
@@ -84,7 +92,7 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
         }
 
         // QOI_OP_RGB (if all compression attempts have failed)
-        try writer.writeAll(&(.{254} ++ @as([3]u8, current_rgb)));
+        try writer.writeAll(&(.{254} ++ current_rgb));
         continue;
     }
     // Finish any incomplete runs
@@ -137,13 +145,13 @@ pub fn read(reader: anytype, writer: anytype) !Header {
             // QOI_OP_LUMA
             128...191 => {
                 index += 1;
-                const mask: @Vector(4, u6) = .{ 15, 63, 15, 0 };
-                // Red and Blue must include green bias.
+                const mask: @Vector(4, u6) = .{ 15, 0, 15, 0 };
+                // Red and Blue must include Green bias.
                 const bias: @Vector(4, u6) = .{ 40, 32, 40, 0 };
                 const next_byte = try reader.readByte();
-                const biased_green_difference = tag_byte & 63;
-                const biased_red_blue_difference = @Vector(4, u8){ (next_byte >> 4), 0, next_byte, 0 };
-                const difference = (biased_red_blue_difference & mask) +% @Vector(4, u8){ biased_green_difference, biased_green_difference, biased_green_difference, 0 } -% bias;
+                const biased_g_difference = tag_byte & 63;
+                const biased_rb_difference = @Vector(4, u8){ (next_byte >> 4), 0, next_byte, 0 };
+                const difference = (biased_rb_difference & mask) +% @Vector(4, u8){ biased_g_difference, biased_g_difference, biased_g_difference, 0 } -% bias;
                 current_rgba = prev_rgba +% difference;
             },
             // QOI_OP_RUN
