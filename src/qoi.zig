@@ -112,13 +112,13 @@ pub fn read(reader: anytype, writer: anytype) !Header {
     }
 
     // Previous pixel and hash table must be initialized to 0
-    var prev_rgba = @Vector(4, u8){ 0, 0, 0, 255 };
-    var hash_table = [_]@Vector(4, u8){ @splat(0) } ** 64;
+    var prev_rgba = [4]u8{ 0, 0, 0, 255 };
+    var hash_table = [_][4]u8{[_]u8{0} ** 4} ** 64;
 
     var index: u64 = 0;
     while (index < @as(u64, header.width) * @as(u64, header.height)) {
 
-        var current_rgba: @Vector(4, u8) = undefined;
+        var current_rgba: [4]u8 = undefined;
         const tag_byte = try reader.readByte();
         switch(tag_byte) {
             // QOI_OP_INDEX
@@ -137,30 +137,45 @@ pub fn read(reader: anytype, writer: anytype) !Header {
             // QOI_OP_DIFF
             64...127 => {
                 index += 1;
-                const mask: @Vector(4, u2) = .{ 3, 3, 3, 0 };
-                const bias: @Vector(4, u2) = .{ 2, 2, 2, 0 };
-                const difference = (@Vector(4, u8){ (tag_byte >> 4), (tag_byte >> 2), tag_byte, 0} & mask) -% bias;
-                current_rgba = prev_rgba +% difference;
+                const difference = [3]u8{
+                    ((tag_byte >> 4) & 3) -% 2,
+                    ((tag_byte >> 2) & 3) -% 2,
+                    (tag_byte & 3) -% 2,
+                };
+                current_rgba = .{
+                    prev_rgba[0] +% difference[0],
+                    prev_rgba[1] +% difference[1],
+                    prev_rgba[2] +% difference[2],
+                    prev_rgba[3],
+                };
             },
             // QOI_OP_LUMA
             128...191 => {
                 index += 1;
-                const mask: @Vector(4, u6) = .{ 15, 0, 15, 0 };
                 // Red and Blue must include Green bias.
-                const bias: @Vector(4, u6) = .{ 40, 32, 40, 0 };
+                const bias: [3]u8 = .{ 40, 32, 40 };
                 const next_byte = try reader.readByte();
                 const biased_g_difference = tag_byte & 63;
-                const biased_rb_difference = @Vector(4, u8){ (next_byte >> 4), 0, next_byte, 0 };
-                const difference = (biased_rb_difference & mask) +% @Vector(4, u8){ biased_g_difference, biased_g_difference, biased_g_difference, 0 } -% bias;
-                current_rgba = prev_rgba +% difference;
+                const biased_rb_difference = [2]u8{ (next_byte >> 4) & 15, next_byte & 15 };
+                const difference = .{
+                    (biased_rb_difference[0] +% biased_g_difference) -% bias[0],
+                    biased_g_difference -% bias[1],
+                    (biased_rb_difference[1] +% biased_g_difference) -% bias[2],
+                };
+                current_rgba = .{
+                    prev_rgba[0] +% difference[0],
+                    prev_rgba[1] +% difference[1],
+                    prev_rgba[2] +% difference[2],
+                    prev_rgba[3],
+                };
             },
             // QOI_OP_RUN
             192...253 => {
                 const run = (tag_byte & 63) + 1;
                 index += run;
                 switch (header.channels) {
-                    3 => try writer.writeBytesNTimes(@as([4]u8, prev_rgba)[0..3], run),
-                    4 => try writer.writeBytesNTimes(&@as([4]u8, prev_rgba), run),
+                    3 => try writer.writeBytesNTimes(prev_rgba[0..3], run),
+                    4 => try writer.writeBytesNTimes(&prev_rgba, run),
                     else => unreachable,
                 }
                 // Updating hash table and previous color is unecessary as there are no new colors.
@@ -178,8 +193,8 @@ pub fn read(reader: anytype, writer: anytype) !Header {
             },
         }
         switch (header.channels) {
-            3 => try writer.writeAll(@as([4]u8, current_rgba)[0..3]),
-            4 => try writer.writeAll(&@as([4]u8, current_rgba)),
+            3 => try writer.writeAll(current_rgba[0..3]),
+            4 => try writer.writeAll(&current_rgba),
             else => unreachable,
         }
         prev_rgba = current_rgba;
