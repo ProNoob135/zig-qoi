@@ -21,16 +21,15 @@ pub fn main() !void {
     const ToFrom = enum { qoi_to_raw, raw_to_qoi };
     var qoi_header: qoi.Header = undefined;
     var to_from: ToFrom = undefined;
-    if (@as(u32, @bitCast(input_path[input_path.len-4..][0..4].*)) == @as(u32, @bitCast(@as([4]u8, ".raw".*)))) {
+    if (input_path.len >= 4 and @as(u32, @bitCast(input_path[input_path.len-4..][0..4].*)) == @as(u32, @bitCast(@as([4]u8, ".raw".*)))) {
         to_from = .raw_to_qoi;
         qoi_header = .{
              .width = std.fmt.parseInt(u32, args.next() orelse printHelp(), 10) catch printHelp(),
              .height = std.fmt.parseInt(u32, args.next() orelse printHelp(), 10) catch printHelp(),
-             .channels = std.fmt.parseInt(u3, args.next() orelse printHelp(), 10) catch printHelp(),
-             .colorspace = std.fmt.parseInt(u1, args.next() orelse printHelp(), 10) catch printHelp(),
+             .channels = std.fmt.parseInt(u8, args.next() orelse printHelp(), 10) catch printHelp(),
+             .colorspace = std.fmt.parseInt(u8, args.next() orelse printHelp(), 10) catch printHelp(),
         };
-    if (qoi_header.channels < 3 or qoi_header.channels > 4 or qoi_header.colorspace < 0 or qoi_header.colorspace > 1) printHelp();
-    } else if (@as(u32, @bitCast(input_path[input_path.len-4..][0..4].*)) == @as(u32, @bitCast(@as([4]u8, ".qoi".*)))) {
+    } else if (input_path.len >= 4 and @as(u32, @bitCast(input_path[input_path.len-4..][0..4].*)) == @as(u32, @bitCast(@as([4]u8, ".qoi".*)))) {
         to_from = .qoi_to_raw;
     } else printHelp();
 
@@ -54,11 +53,13 @@ pub fn main() !void {
 
     switch(to_from) {
         .qoi_to_raw => _ = qoi.read(&buffered_input_image.reader(), &buffered_output_image.writer()) catch |err| switch(err) {
-            error.InvalidInput => std.debug.print("Not a QOI image!\n", .{}),
-            else => std.debug.print("File error: {s}\n", .{@errorName(err)}),
-        },
-        .raw_to_qoi => qoi.write(&buffered_input_image.reader(), &buffered_output_image.writer(), qoi_header) catch |err|
-            std.debug.print("File error: {s}\n", .{@errorName(err)}),
+                error.InvalidInput => std.debug.print("Not a valid QOI image!\n", .{}),
+                else => std.debug.print("File error: {s}\n", .{@errorName(err)}),
+            },
+        .raw_to_qoi => qoi.write(&buffered_input_image.reader(), &buffered_output_image.writer(), qoi_header) catch |err| switch(err) {
+                error.InvalidInput => std.debug.print("Invalid QOI header!\n", .{}),
+                else => std.debug.print("File error: {s}\n", .{@errorName(err)}),
+            }
     } 
 
     try buffered_output_image.flush();

@@ -9,6 +9,14 @@ pub const Header = extern struct {
 };
 
 pub fn write(reader: anytype, writer: anytype, header: Header) !void {
+    switch(header.channels) {
+        3, 4 => {},
+        else => return error.InvalidInput,
+    }
+    switch(header.colorspace) {
+        0, 1 => {},
+        else => return error.InvalidInput,
+    }
     try writer.writeStructEndian(header, std.builtin.Endian.big);
 
     // Previous pixel and hash table must be initialized to 0
@@ -109,6 +117,14 @@ pub fn read(reader: anytype, writer: anytype) !Header {
     const header = try reader.readStructEndian(Header, .big);
     if (@as(u32, @bitCast(header.magic)) != @as(u32, @bitCast(@as([4]u8, "qoif".*)))) {
         return error.InvalidInput;
+    }
+    switch(header.channels) {
+        3, 4 => {},
+        else => return error.InvalidInput,
+    }
+    switch(header.colorspace) {
+        0, 1 => {},
+        else => return error.InvalidInput,
     }
 
     // Previous pixel and hash table must be initialized to 0
