@@ -9,6 +9,9 @@ pub const Header = extern struct {
 };
 
 pub fn write(reader: anytype, writer: anytype, header: Header) !void {
+    if (@as(u32, @bitCast(header.magic)) != @as(u32, @bitCast(@as([4]u8, "qoif".*)))) {
+        return error.InvalidInput;
+    }
     switch(header.channels) {
         3, 4 => {},
         else => return error.InvalidInput,
