@@ -39,12 +39,12 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
         if (@as(u32, @bitCast(current_rgba)) == @as(u32, @bitCast(prev_rgba))) {
             run += 1;
             if (run == 62) {
-                try writer.writeByte(192 + (run - 1));
+                try writer.writeByte(192 | (run - 1));
                 run = 0;
             }
             continue;
         } else if (run != 0) {
-            try writer.writeByte(192 + (run - 1));
+            try writer.writeByte(192 | (run - 1));
             run = 0;
         }
 
@@ -85,7 +85,7 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
             difference[2] +% 2,
         };
         if (difference_u2[0] < 4 and difference_u2[1] < 4 and difference_u2[2] < 4) {
-            try writer.writeByte(64 + (difference_u2[0] << 4) + (difference_u2[1] << 2) + difference_u2[2]);
+            try writer.writeByte(64 | (difference_u2[0] << 4) | (difference_u2[1] << 2) | difference_u2[2]);
             continue;
         }
 
@@ -96,9 +96,7 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
             difference[2] -% difference[1] +% 8,
         };
         if (difference_luma[0] < 16 and difference_luma[1] < 64 and difference_luma[2] < 16 ) {
-            //try writer.writeByte(128 + difference_luma[1]);
-            //try writer.writeByte((difference_luma[0] << 4) + difference_luma[2]);
-            try writer.writeAll(&(.{128 + difference_luma[1], (difference_luma[0] << 4) + difference_luma[2]}));
+            try writer.writeAll(&(.{128 | difference_luma[1], (difference_luma[0] << 4) | difference_luma[2]}));
             continue;
         }
 
@@ -108,7 +106,7 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
     }
     // Finish any incomplete runs
     if (run != 0) {
-        try writer.writeByte(192 + (run - 1));
+        try writer.writeByte(192 | (run - 1));
         run = 0;
     }
 
