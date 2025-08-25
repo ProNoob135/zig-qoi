@@ -40,27 +40,27 @@ pub fn main() !void {
         std.debug.print("file read error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
-    const input_image_reader = input_image.reader();
-    var buffered_input_image = std.io.bufferedReader(input_image_reader);
+    var input_image_reader_buffer: [4096]u8 = undefined;
+    var input_image_reader = input_image.reader(&input_image_reader_buffer);
 
     const output_image = std.fs.cwd().createFile(output_path, .{}) catch |err| {
         std.debug.print("File write error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
     defer output_image.close();
-    const output_image_writer = output_image.writer();
-    var buffered_output_image = std.io.bufferedWriter(output_image_writer);
+    var output_image_writer_buffer: [4096]u8 = undefined;
+    var output_image_writer = output_image.writer(&output_image_writer_buffer);
 
     switch(to_from) {
-        .qoi_to_raw => _ = qoi.read(&buffered_input_image.reader(), &buffered_output_image.writer()) catch |err| switch(err) {
+        .qoi_to_raw => _ = qoi.read(&input_image_reader.interface, &output_image_writer.interface) catch |err| switch(err) {
                 error.InvalidInput => std.debug.print("Not a valid QOI image!\n", .{}),
                 else => std.debug.print("File error: {s}\n", .{@errorName(err)}),
             },
-        .raw_to_qoi => qoi.write(&buffered_input_image.reader(), &buffered_output_image.writer(), qoi_header) catch |err| switch(err) {
+        .raw_to_qoi => qoi.write(&input_image_reader.interface, &output_image_writer.interface, qoi_header) catch |err| switch(err) {
                 error.InvalidInput => std.debug.print("Invalid QOI header!\n", .{}),
                 else => std.debug.print("File error: {s}\n", .{@errorName(err)}),
             }
     } 
 
-    try buffered_output_image.flush();
+    try output_image_writer.interface.flush();
 }

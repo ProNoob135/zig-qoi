@@ -20,7 +20,7 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
         0, 1 => {},
         else => return error.InvalidInput,
     }
-    try writer.writeStructEndian(header, std.builtin.Endian.big);
+    try writer.writeStruct(header, std.builtin.Endian.big);
 
     // Previous pixel and hash table must be initialized to 0
     var prev_rgba = [4]u8{ 0, 0, 0, 255 };
@@ -30,8 +30,8 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
     var index: u64 = 0;
     while (index < @as(u64, header.width) * @as(u64, header.height)) : (index += 1) {
         const current_rgba: [4]u8 = switch (header.channels) {
-            3 => try reader.readBytesNoEof(3) ++ .{255},
-            4 => try reader.readBytesNoEof(4),
+            3 => (try reader.takeArray(3)).* ++ .{255},
+            4 => (try reader.takeArray(4)).*,
             else => unreachable,
         };
 
@@ -115,7 +115,7 @@ pub fn write(reader: anytype, writer: anytype, header: Header) !void {
 }
 
 pub fn read(reader: anytype, writer: anytype) !Header {
-    const header = try reader.readStructEndian(Header, .big);
+    const header = try reader.takeStruct(Header, .big);
     if (@as(u32, @bitCast(header.magic)) != @as(u32, @bitCast(@as([4]u8, "qoif".*)))) {
         return error.InvalidInput;
     }
@@ -135,7 +135,7 @@ pub fn read(reader: anytype, writer: anytype) !Header {
     var index: u64 = 0;
     while (index < @as(u64, header.width) * @as(u64, header.height)) {
         var current_rgba: [4]u8 = undefined;
-        const tag_byte = try reader.readByte();
+        const tag_byte = try reader.takeByte();
         block: {
             switch(tag_byte) {
                 // QOI_OP_INDEX
@@ -165,7 +165,7 @@ pub fn read(reader: anytype, writer: anytype) !Header {
                     index += 1;
                     // Red and Blue must include Green bias.
                     const bias: [3]u8 = .{ 40, 32, 40 };
-                    const next_byte = try reader.readByte();
+                    const next_byte = try reader.takeByte();
                     const biased_g_difference = tag_byte & 63;
                     const biased_rb_difference = [2]u8{ (next_byte >> 4) & 15, next_byte & 15 };
                     const difference = .{
@@ -186,8 +186,8 @@ pub fn read(reader: anytype, writer: anytype) !Header {
                     index += run;
                     // Skip default write and write run all at once
                     switch (header.channels) {
-                        3 => try writer.writeBytesNTimes(prev_rgba[0..3], run),
-                        4 => try writer.writeBytesNTimes(&prev_rgba, run),
+                        3 => try writer.splatBytesAll(prev_rgba[0..3], run),
+                        4 => try writer.splatBytesAll(&prev_rgba, run),
                         else => unreachable,
                     }
                     // Updating hash table and previous color is unecessary as there are no new colors.
@@ -196,12 +196,12 @@ pub fn read(reader: anytype, writer: anytype) !Header {
                 // QOI_OP_RGB
                 254 => {
                     index += 1;
-                    current_rgba = try reader.readBytesNoEof(3) ++ .{prev_rgba[3]};
+                    current_rgba = (try reader.takeArray(3)).* ++ .{prev_rgba[3]};
                 },
                 // QOI_OP_RGBA
                 255 => {
                     index += 1;
-                    current_rgba = try reader.readBytesNoEof(4);
+                    current_rgba = (try reader.takeArray(4)).*;
                 },
             }
 
